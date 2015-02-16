@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 
 public class FreeCam : MonoBehaviour
 {
@@ -43,6 +44,15 @@ public class FreeCam : MonoBehaviour
     public Camera ChildCamera;
     [Tooltip("When the use middle mouse clicks on an object in the game, we will only center on it if it is on this layer.")]
     public LayerMask CenterClickMask;
+    [Tooltip("Use mouse or touch screen. Automatic will pick the appropriate one by itself (Recommended)")]
+    public InputMode Mode;
+
+    public enum InputMode
+    {
+        Automatic,
+        Mouse,
+        Touch,
+    }
 
     private Vector3 _targetMovePosition;
     private Vector3 _actualMovePosition;
@@ -53,57 +63,72 @@ public class FreeCam : MonoBehaviour
     private float _targetZoom;
     private float _actualZoom;
 
-    private Vector3 _mouseDelta;
-    private Vector3 _lastMousePosition;
-    private float _middleDownTime;
+    private FreeCamInput _input;
+    private InputMode _currentMode;
+
+    private float _sensitivity = 1;
+
+    void Awake()
+    {
+        InitializeFreeCamInput();
+    }
+
+    void InitializeFreeCamInput()
+    {
+        _currentMode = Mode;
+        InputMode modeToTest = _currentMode;
+
+        if (_currentMode == InputMode.Automatic)
+            modeToTest = ResolveAutomaticInputMode();
+
+        switch (modeToTest)
+        {
+            case InputMode.Mouse:
+               _input = new FreeCamMouseInput();
+                break;
+            case InputMode.Touch:
+                _input = new FreeCamTouchInput();
+                break; 
+        }
+    }
 
     void Update()
     {
-        //Update mouse info
-        _mouseDelta = _lastMousePosition - Input.mousePosition;
-        _lastMousePosition = Input.mousePosition;
+        if (_currentMode != Mode || _input == null)
+            InitializeFreeCamInput();
+        _input.Update();
 
         //Update the target rotation
-        if (!Input.GetMouseButtonDown(1) && Input.GetMouseButton(1))
+        if (_input.ShouldRotate())
         {
-            _targetLookEuler.y -= _mouseDelta.x * Time.deltaTime * RotationSensitivity.x;
-            _targetLookEuler.x += _mouseDelta.y * Time.deltaTime * RotationSensitivity.y;
+            _targetLookEuler.y -= _input.GetPrimaryDelta().x * Time.deltaTime * RotationSensitivity.x * _sensitivity;
+            _targetLookEuler.x += _input.GetPrimaryDelta().y * Time.deltaTime * RotationSensitivity.y * _sensitivity;
         }
         if (_targetLookEuler.x > 90) _targetLookEuler.x = 90;
         if (_targetLookEuler.x < -90) _targetLookEuler.x = -90;
 
         //Update the target position
-        if (!Input.GetMouseButtonDown(2) && Input.GetMouseButton(2))
+        if (_input.ShouldDrag())
         {
             float scaleFactor = Mathf.Clamp(Mathf.Abs(_actualZoom)/PositionalZoomScale, 1, float.MaxValue);
-            _targetMovePosition += transform.up * _mouseDelta.y * Time.deltaTime * PositionalSensitivity.y * scaleFactor;
-            _targetMovePosition += transform.right * _mouseDelta.x * Time.deltaTime * PositionalSensitivity.x * scaleFactor;
+            _targetMovePosition += transform.up * _input.GetPrimaryDelta().y * Time.deltaTime * PositionalSensitivity.y * scaleFactor * _sensitivity;
+            _targetMovePosition += transform.right * _input.GetPrimaryDelta().x * Time.deltaTime * PositionalSensitivity.x * scaleFactor * _sensitivity;
         }
 
         //Update the target zoom
-        _targetZoom -= Input.mouseScrollDelta.y * Time.deltaTime * ZoomSensitivity * ZoomFollowCurve.Evaluate((Mathf.Abs(_targetZoom) / ZoomFollowCurveStart));
+        _targetZoom -= _input.GetZoomDelta() * Time.deltaTime * ZoomSensitivity * ZoomFollowCurve.Evaluate((Mathf.Abs(_targetZoom) / ZoomFollowCurveStart));
         _targetZoom = Mathf.Clamp(_targetZoom, MinZoom, MaxZoom);
-
-        //Count how long middle mouse has been held for (So we can determine whether it was a click or drag)
-        if (Input.GetMouseButton(2))
-            _middleDownTime += Time.deltaTime;
-
+        
         //When mid mouse is released and if it was released within the 'click' threshold,
         //raycast from the currnet mouse position to try and find an object to center on
-        if (Input.GetMouseButtonUp(2))
+        if (_input.ShouldCenterOnTarget())
         {
-            if (_middleDownTime < 0.125f)
+            var ray = ChildCamera.ScreenPointToRay(Input.mousePosition);
+            var hit = new RaycastHit();
+            if (Physics.Raycast(ray, out hit, 1000, CenterClickMask))
             {
-                var ray = ChildCamera.ScreenPointToRay(Input.mousePosition);
-                var hit = new RaycastHit();
-                if (Physics.Raycast(ray, out hit, 1000, CenterClickMask))
-                {
-                    _targetMovePosition = hit.collider.transform.position;
-                }
+                _targetMovePosition = hit.collider.transform.position;
             }
-
-            //Reset midmouse held down timer
-            _middleDownTime = 0;
         }
     }
     
@@ -181,5 +206,210 @@ public class FreeCam : MonoBehaviour
     public void SetSmoothZoom(float zoom)
     {
         _targetZoom =  zoom;
+    }
+
+    public void SetSensitivity(float Sensitivity)
+    {
+        if (_currentMode != Mode || _input == null)
+            InitializeFreeCamInput();
+        _sensitivity = _input.Sensitivity = Sensitivity;
+    }
+
+    public static InputMode ResolveAutomaticInputMode()
+    {
+        if (Application.isEditor)
+        {
+            return InputMode.Mouse;
+        }
+        else
+        {
+#if UNITY_ANDROID || UNITY_IPHONE
+            return InputMode.Touch;
+#else
+            return InputMode.Mouse;
+#endif
+        }
+    }
+}
+
+
+public abstract class FreeCamInput
+{
+    public float Sensitivity = 1;
+
+    public abstract Vector2 GetPrimaryDelta();
+    public abstract float GetZoomDelta();
+    public abstract bool ShouldRotate();
+    public abstract bool ShouldDrag();
+    public abstract bool ShouldCenterOnTarget();
+
+    public abstract void Update();
+}
+
+public class FreeCamMouseInput : FreeCamInput
+{
+    private Vector3 _mouseDelta;
+    private Vector3 _lastMousePosition;
+    private float _middleDownTime;
+
+
+    public override Vector2 GetPrimaryDelta()
+    {
+        return _mouseDelta;
+    }
+
+    public override float GetZoomDelta()
+    {
+        return Input.mouseScrollDelta.y * Sensitivity;
+    }
+
+    public override bool ShouldRotate()
+    {
+        return !Input.GetMouseButtonDown(1) && Input.GetMouseButton(1);
+    }
+
+    public override bool ShouldDrag()
+    {
+        return !Input.GetMouseButtonDown(2) && Input.GetMouseButton(2);
+    }
+
+    public override bool ShouldCenterOnTarget()
+    {
+        return Input.GetMouseButtonUp(2) && (_middleDownTime < 0.125f);
+    }
+
+    public override void Update()
+    {
+        //Update mouse info
+        _mouseDelta = _lastMousePosition - Input.mousePosition;
+        _lastMousePosition = Input.mousePosition;
+
+        if (Input.GetMouseButton(2))
+            _middleDownTime += Time.deltaTime;
+        if (Input.GetMouseButtonDown(2))
+            _middleDownTime = 0;
+    }
+}
+
+public class FreeCamTouchInput : FreeCamInput
+{
+    private class TouchDetails
+    {
+        public bool HasValidTouch
+        {
+            get { return TouchID != -1; }
+        }
+
+        public int TouchID = -1;
+        public Vector2 StartPosition;
+        public Vector2 CurrentPosition;
+        public Vector2 PrevPosition;
+        public Vector2 Delta;
+        public float DownTime;
+        public bool WasDown, WasUp;
+
+        public void SetTouch(Touch t)
+        {
+            TouchID = t.fingerId;
+            StartPosition = CurrentPosition = PrevPosition = t.position;
+            Delta = Vector3.zero;
+            DownTime = 0;
+            WasDown = true;
+        }
+
+        public void UpdateTouch(Touch t)
+        {
+            PrevPosition = CurrentPosition;
+            CurrentPosition = t.position;
+            Delta = t.deltaPosition;
+            DownTime += Time.deltaTime;
+        }
+
+        public void RemoveTouch(Touch t)
+        {
+            TouchID = -1;
+            WasUp = true;
+        }
+
+        public void ResetUpDown()
+        {
+            WasUp = WasDown = false;
+        }
+    }
+
+
+    private TouchDetails
+        _activeFinger = new TouchDetails(),
+        _activeSecondFinger = new TouchDetails();
+
+    private Vector3 _mouseDelta;
+    private Vector3 _lastMousePosition;
+    private float _timeSinceLastTouch;
+
+    public override Vector2 GetPrimaryDelta()
+    {
+        //invert the delta, coz thats how mobile do
+        return _activeFinger.HasValidTouch ? -_activeFinger.Delta * Sensitivity : Vector2.zero;
+    }
+
+    public override float GetZoomDelta()
+    {
+        //no zoom :( 
+        return 0 * Sensitivity;
+    }
+
+    public override bool ShouldRotate()
+    {
+        return _activeFinger.HasValidTouch && !_activeSecondFinger.HasValidTouch;
+    }
+
+    public override bool ShouldDrag()
+    {
+        return _activeFinger.HasValidTouch && _activeSecondFinger.HasValidTouch;
+    }
+
+    public override bool ShouldCenterOnTarget()
+    {
+        return (_timeSinceLastTouch < 0.25f) && (_activeFinger.DownTime < 0.125f) && _activeFinger.WasUp;
+    }
+
+    public override void Update()
+    {
+        if(_activeFinger.WasUp)
+            _timeSinceLastTouch = 0; 
+ 
+        _activeFinger.ResetUpDown();
+        _activeSecondFinger.ResetUpDown();
+        _timeSinceLastTouch += Time.deltaTime;
+
+        foreach (var touch in Input.touches)
+        {
+            if (_activeFinger.TouchID == touch.fingerId)
+            {
+                _activeFinger.UpdateTouch(touch);
+            }
+            else if (_activeSecondFinger.TouchID == touch.fingerId)
+            {
+                _activeSecondFinger.UpdateTouch(touch);
+            }
+
+            if (_activeFinger.TouchID == touch.fingerId && touch.phase == TouchPhase.Ended)
+            {
+                _activeFinger.RemoveTouch(touch);
+            }
+            else if (_activeSecondFinger.TouchID == touch.fingerId && touch.phase == TouchPhase.Ended)
+            {
+                _activeSecondFinger.RemoveTouch(touch);
+            }
+
+            if (!_activeFinger.HasValidTouch && touch.phase == TouchPhase.Began)
+            {
+                _activeFinger.SetTouch(touch);
+            }
+            else if (!_activeSecondFinger.HasValidTouch && touch.phase == TouchPhase.Began)
+            {
+                _activeSecondFinger.SetTouch(touch);
+            }
+        }
     }
 }
