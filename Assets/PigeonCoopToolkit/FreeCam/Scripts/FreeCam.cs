@@ -207,6 +207,39 @@ public class FreeCam : MonoBehaviour
         _targetZoom =  zoom;
     }
 
+    /// <summary>
+    /// Conveniance method, see the other
+    /// SetFocusToArea method. Uses bounds center
+    /// as point and bounds extends magnitude as areaSize
+    /// </summary>
+    public void SetFocusToArea(Bounds b)
+    {
+        SetFocusToArea(b.center, b.extents.magnitude);
+    }
+
+    /// <summary>
+    /// Centers the camera on 'point' and attempts to fit into view 
+    /// an area that is 'areaSize' units away from that point by zooming
+    /// in or out as neccesary. The zoom is capped at MinZoom and MaxZoom
+    /// so the area you specify is not garunteed to fall entirely within 
+    /// the cameras view.
+    /// </summary>
+    public void SetFocusToArea(Vector3 point, float areaSize)
+    {
+        _targetMovePosition = point;
+
+        float requiredZoomOffset = 0;
+        if (!ChildCamera.isOrthoGraphic)
+        {
+            Plane leftFrustumPlane = GeometryUtility.CalculateFrustumPlanes(ChildCamera)[0];
+            Ray r = new Ray(transform.position + ChildCamera.transform.right * -(areaSize / 2f), ChildCamera.transform.forward);
+
+            leftFrustumPlane.Raycast(r, out requiredZoomOffset);
+        }
+        
+        _targetZoom = Mathf.Clamp(_targetZoom + requiredZoomOffset, MinZoom, MaxZoom);
+    }
+
     public void SetSensitivity(float Sensitivity)
     {
         if (_currentMode != Mode || _input == null)
