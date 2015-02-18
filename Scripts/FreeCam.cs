@@ -93,8 +93,17 @@ public class FreeCam : MonoBehaviour
 
     void Update()
     {
+        if (Input.GetKeyDown(KeyCode.P))
+        {
+            if(IsInputEnabled())
+                DisableInput();
+            else
+                EnableInput();
+        }
+
         if (_currentMode != Mode || _input == null)
             InitializeFreeCamInput();
+
         _input.Update();
 
         //Update the target rotation
@@ -157,6 +166,31 @@ public class FreeCam : MonoBehaviour
 
         ChildCamera.transform.localPosition = new Vector3(0, 0, -_actualZoom);
 
+    }
+
+    /// <summary>
+    /// Disabled input handling. Does not disable smoothing/etc, so the other functions will 
+    /// still work and the camera will even come to a smooth stop if you call this method while
+    /// the user is dragging the camera
+    /// </summary>
+    public void DisableInput()
+    {
+        if (!(_input is FreeCamDisabledInput))
+            _input = new FreeCamDisabledInput();
+    }
+
+    /// <summary>
+    /// Enables input handling.
+    /// </summary>
+    public void EnableInput()
+    {
+        if (_input is FreeCamDisabledInput)
+            InitializeFreeCamInput();
+    }
+
+    public bool IsInputEnabled()
+    {
+        return !(_input is FreeCamDisabledInput);
     }
 
     /// <summary>
